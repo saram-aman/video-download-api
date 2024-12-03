@@ -5,13 +5,13 @@ const puppeteer = require('puppeteer');
 const https = require('https');
 const cors = require('cors'); 
 const app = express(); 
-const PORT = 4000; 
+const PORT = 3000; 
 app.use(cors()); 
 app.use(express.json());
 const agent = new https.Agent({
     rejectUnauthorized: false
 });
-app.post('/fetch-video-urls', async (req, res) => {
+app.post('api/fetch-video-urls', async (req, res) => {
     const { pageUrl } = req.body;
     if (!pageUrl) return res.status(400).json({ error: 'Page URL is required' });
     try {
