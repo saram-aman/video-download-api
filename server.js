@@ -1,7 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 const https = require('https');
 const cors = require('cors');
 const app = express();
@@ -54,6 +55,158 @@ const isVideoUrl = (url) => {
     return false;
 };
 
+// Alternative endpoint that doesn't use Puppeteer
+app.post('/fetch-video-urls-simple', async (req, res) => {
+    const { pageUrl } = req.body;
+    
+    if (!pageUrl) {
+        return res.status(400).json({ error: 'Page URL is required' });
+    }
+    
+    try {
+        const videoUrls = new Set();
+        
+        // Direct HTTP request to get HTML content
+        const response = await axios.get(pageUrl, { 
+            httpsAgent: agent,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+            }
+        });
+        
+        // Extract videos using Cheerio
+        const htmlVideos = extractVideosFromHTML(response.data);
+        htmlVideos.forEach(url => videoUrls.add(url));
+        
+        // Look for video URLs in the page source
+        const $ = cheerio.load(response.data);
+        const html = $.html();
+        
+        // Find URLs with video extensions
+        const urlRegex = /(https?:\/\/[^"'\s)]+\.(mp4|webm|ogg|m3u8|mpd|mov|flv|avi|wmv|ts))/g;
+        const matches = html.match(urlRegex);
+        if (matches) {
+            matches.forEach(match => videoUrls.add(match));
+        }
+        
+        // Find URLs in script tags that might be video sources
+        $('script').each((_, element) => {
+            const scriptContent = $(element).html();
+            if (scriptContent) {
+                // Look for video player configurations
+                if (scriptContent.includes('video') || 
+                    scriptContent.includes('player') || 
+                    scriptContent.includes('stream')) {
+                    
+                    const urlMatches = scriptContent.match(/"(https?:\/\/[^"]+)"/g);
+                    if (urlMatches) {
+                        urlMatches
+                            .map(url => url.replace(/"/g, ''))
+                            .filter(url => isVideoUrl(url))
+                            .forEach(url => videoUrls.add(url));
+                    }
+                }
+            }
+        });
+        
+        // Convert Set to Array and make sure URLs are absolute
+        const finalVideoUrls = Array.from(videoUrls)
+            .filter(url => url && url.trim() !== '')
+            .map(url => {
+                // Make relative URLs absolute
+                if (url.startsWith('/')) {
+                    try {
+                        const baseUrl = new URL(pageUrl);
+                        return `${baseUrl.origin}${url}`;
+                    } catch (e) {
+                        return url;
+                    }
+                }
+                return url;
+            });
+        
+        if (finalVideoUrls.length === 0) {
+            return res.status(404).json({ 
+                error: 'No video URLs found on the page', 
+                message: 'Try using the standard endpoint or check if the site uses a custom video player'
+            });
+        }
+        
+        return res.json({ 
+            videoUrls: finalVideoUrls,
+            pageUrl: pageUrl,
+            count: finalVideoUrls.length,
+            method: 'simple'
+        });
+        
+    } catch (error) {
+        console.error('Error fetching video URLs (simple):', error);
+        console.error('Error fetching video URLs with Puppeteer:', error);
+        
+        // Fall back to simple method if Puppeteer fails
+        try {
+            const response = await axios.get(pageUrl, { 
+                httpsAgent: agent,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+                }
+            });
+            
+            const videoUrls = new Set();
+            
+            // Extract videos using Cheerio
+            const htmlVideos = extractVideosFromHTML(response.data);
+            htmlVideos.forEach(url => videoUrls.add(url));
+            
+            // Look for video URLs in the page source
+            const $ = cheerio.load(response.data);
+            const html = $.html();
+            
+            const urlRegex = /(https?:\/\/[^"'\s)]+\.(mp4|webm|ogg|m3u8|mpd|mov|flv|avi|wmv|ts))/g;
+            const matches = html.match(urlRegex);
+            if (matches) {
+                matches.forEach(match => videoUrls.add(match));
+            }
+            
+            // Convert Set to Array and make sure URLs are absolute
+            const finalVideoUrls = Array.from(videoUrls)
+                .filter(url => url && url.trim() !== '')
+                .map(url => {
+                    // Make relative URLs absolute
+                    if (url.startsWith('/')) {
+                        try {
+                            const baseUrl = new URL(pageUrl);
+                            return `${baseUrl.origin}${url}`;
+                        } catch (e) {
+                            return url;
+                        }
+                    }
+                    return url;
+                });
+            
+            if (finalVideoUrls.length === 0) {
+                return res.status(404).json({ 
+                    error: 'No video URLs found on the page', 
+                    message: 'The page may use a custom video player or require JavaScript'
+                });
+            }
+            
+            return res.json({ 
+                videoUrls: finalVideoUrls,
+                pageUrl: pageUrl,
+                count: finalVideoUrls.length,
+                method: 'fallback'
+            });
+            
+        } catch (fallbackError) {
+            return res.status(500).json({ 
+                error: 'Error fetching video URLs', 
+                message: `Original error: ${error.message}. Fallback error: ${fallbackError.message}`
+            });
+        }
+    }
+});
+
 // Main endpoint for fetching video URLs
 app.post('/fetch-video-urls', async (req, res) => {
     const { pageUrl } = req.body;
@@ -67,9 +220,12 @@ app.post('/fetch-video-urls', async (req, res) => {
         const videoUrls = new Set();
         
         // METHOD 1: Use Puppeteer for dynamic content
-        const browser = await puppeteer.launch({ 
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] // For cloud deployment
+        const browser = await puppeteer.launch({
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless,
+            ignoreHTTPSErrors: true
         });
         
         const page = await browser.newPage();
@@ -196,7 +352,11 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
     res.json({
         message: 'Video Download API',
-        usage: 'POST to /fetch-video-urls with { "pageUrl": "https://example.com" }',
+        endpoints: {
+            standard: 'POST to /fetch-video-urls with { "pageUrl": "https://example.com" }',
+            simple: 'POST to /fetch-video-urls-simple with { "pageUrl": "https://example.com" }'
+        },
+        note: 'If the standard endpoint fails, try the simple endpoint which doesn\'t use Puppeteer',
         author: 'Saram Aman (Enhanced)'
     });
 });
