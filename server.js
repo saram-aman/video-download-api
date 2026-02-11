@@ -53,6 +53,50 @@ function executeYtDlp(args) {
     });
 }
 
+app.get('/', (req, res) => {
+    res.json({
+        name: 'Video Download API',
+        version: '1.0.0',
+        description: 'Universal video downloader supporting 1000+ platforms powered by yt-dlp',
+        status: 'operational',
+        endpoints: {
+            info: {
+                method: 'POST',
+                path: '/api/info',
+                description: 'Fetch video metadata (title, thumbnail, duration, available formats)',
+                body: { url: 'string (required) - Video URL to fetch info from' }
+            },
+            download: {
+                method: 'POST',
+                path: '/api/download',
+                description: 'Download video with optional format selection and trimming',
+                body: {
+                    url: 'string (required) - Video URL to download',
+                    format_id: 'string (optional) - Format ID from info endpoint',
+                    start_time: 'number (optional) - Trim start time in seconds',
+                    end_time: 'number (optional) - Trim end time in seconds'
+                }
+            },
+            status: {
+                method: 'GET',
+                path: '/api/status/:id',
+                description: 'Check download status by download ID'
+            },
+            health: {
+                method: 'GET',
+                path: '/api/health',
+                description: 'API health check'
+            }
+        },
+        supportedPlatforms: [
+            'YouTube', 'Vimeo', 'X (Twitter)', 'Instagram', 'TikTok',
+            'Facebook', 'Reddit', 'Twitch', 'and 1000+ more'
+        ],
+        documentation: 'https://github.com/yt-dlp/yt-dlp',
+        note: 'This API uses yt-dlp. Ensure it is installed on the server.'
+    });
+});
+
 // GET /api/info - Fetch video information
 app.post('/api/info', async (req, res) => {
     try {
